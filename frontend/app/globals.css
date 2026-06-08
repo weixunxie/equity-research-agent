@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+}
+
+/* Thin, unobtrusive scrollbars for the report panel. */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-zinc-700;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+/* Markdown report typography (react-markdown rendered inside `.report-prose`).
+   Builds on @tailwindcss/typography's `prose-invert`, then tightens spacing and
+   gives each H2 section a clear divider. */
+.report-prose {
+  @apply prose prose-invert max-w-none;
+}
+.report-prose :where(h1) {
+  @apply mb-2 text-3xl font-semibold tracking-tight text-white;
+}
+.report-prose :where(h2) {
+  @apply mt-10 border-t border-zinc-800 pt-6 text-xl font-semibold text-white;
+}
+.report-prose :where(h3) {
+  @apply mt-6 text-base font-semibold text-zinc-200;
+}
+.report-prose :where(a) {
+  @apply text-emerald-400 no-underline hover:underline;
+}
+.report-prose :where(table) {
+  @apply my-4 w-full overflow-hidden rounded-lg text-sm;
+}
+.report-prose :where(thead) {
+  @apply bg-zinc-900;
+}
+.report-prose :where(th, td) {
+  @apply border border-zinc-800 px-3 py-2;
+}
+.report-prose :where(strong) {
+  @apply text-white;
+}
+.report-prose :where(hr) {
+  @apply border-zinc-800;
+}
+.report-prose :where(blockquote) {
+  @apply border-l-emerald-700 text-zinc-400;
+}

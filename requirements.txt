@@ -1,0 +1,27 @@
+# --- Agent orchestration ---
+langgraph>=0.2.40
+langchain>=0.3.7
+langchain-core>=0.3.15
+langchain-openai>=0.2.5
+openai>=1.54.0
+
+# --- Retrieval / RAG ---
+qdrant-client>=1.12.0
+tiktoken>=0.8.0
+
+# --- Data sources ---
+yfinance>=0.2.50
+tavily-python>=0.5.0
+requests>=2.32.0
+beautifulsoup4>=4.12.0
+lxml>=5.3.0
+
+# --- API + UI ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+streamlit>=1.39.0
+requests>=2.32.0
+
+# --- Config / models ---
+pydantic>=2.9.0
+python-dotenv>=1.0.1
