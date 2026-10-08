@@ -1,9 +1,9 @@
 """Writer node.
 
-Turns the Analyst's structured ``Analysis`` into a clean markdown report with
-the required sections: Executive Summary, Financial Highlights, Risk Factors,
-Recent News & Sentiment, Conclusion. Falls back to deterministic rendering of
-the analysis dict if the LLM is unavailable.
+Turns the Analyst's structured ``Analysis`` plus the raw market data into a
+markdown research note with fixed sections. The figures come from the data
+sheet, not from the Analyst's prose, so tables carry the actual numbers. Falls
+back to deterministic rendering if the LLM is unavailable.
 """
 from __future__ import annotations
 
@@ -11,22 +11,51 @@ import json
 import logging
 from typing import Any
 
+from backend.graph.formatting import (
+    fmt_money,
+    fmt_mult,
+    fmt_pct,
+    format_financials,
+    format_peers,
+)
 from backend.graph.state import ResearchState
 from backend.llm import get_chat_model
 
 logger = logging.getLogger(__name__)
 
+SECTIONS = (
+    "Executive Summary",
+    "Business Overview",
+    "Financial Highlights",
+    "Valuation & Peers",
+    "Bull Case vs. Bear Case",
+    "Risk Factors",
+    "Recent News & Sentiment",
+    "Conclusion",
+)
+
 _SYSTEM_PROMPT = (
-    "You are a financial writer. Convert the provided structured analysis into a "
-    "polished, professional equity research note in GitHub-flavored Markdown. "
-    "Use EXACTLY these second-level sections in this order:\n"
-    "## Executive Summary\n## Financial Highlights\n## Risk Factors\n"
-    "## Recent News & Sentiment\n## Conclusion\n\n"
-    "Guidelines: open with an H1 title '# {Company} ({TICKER}) — Equity Research'. "
-    "Be concise and balanced, use bullet lists and a markdown table for financial "
-    "highlights where helpful, and cite figures from the data. Do not invent data. "
-    "End with a brief disclaimer that this is AI-generated and not investment advice. "
-    "Output only the markdown, no preamble."
+    "You are a financial writer. Convert the provided structured analysis and "
+    "data sheet into a polished, professional equity research note in "
+    "GitHub-flavored Markdown. Use EXACTLY these second-level sections in this "
+    "order:\n" + "\n".join(f"## {s}" for s in SECTIONS) + "\n\n"
+    "Guidelines:\n"
+    "- Open with an H1 title '# {Company} ({TICKER}) — Equity Research'.\n"
+    "- Executive Summary: the thesis, the stance and what drives it, in one "
+    "tight paragraph plus 3 key-takeaway bullets.\n"
+    "- Financial Highlights: a markdown table of key metrics (price, market "
+    "cap, margins, growth, leverage, free cash flow), then a table of the "
+    "quarterly income statement and one of the annual income statement, each "
+    "followed by 1-2 sentences of interpretation.\n"
+    "- Valuation & Peers: a markdown table comparing the company with its "
+    "peers on the multiples provided, then the valuation view and where the "
+    "price sits against the analyst target range.\n"
+    "- Risk Factors: one bullet per risk as '**Title** (severity) — detail'.\n"
+    "- Take every number from the data sheet exactly as given; never invent or "
+    "recompute figures. Write 'n/a' where the sheet has none.\n"
+    "- Be concise and balanced. End with a brief disclaimer that this is "
+    "AI-generated and not investment advice. Output only the markdown, no "
+    "preamble and no code fences."
 )
 
 
@@ -37,52 +66,95 @@ def _disclaimer() -> str:
     )
 
 
-def _sources_block(state: ResearchState) -> str:
-    mda = state.get("mda", {})
-    news = state.get("news", {})
-    lines: list[str] = []
+def build_sources(state: ResearchState) -> list[dict[str, str]]:
+    """Filings and news articles behind the report, for citation."""
+    mda = state.get("mda", {}) or {}
+    news = state.get("news", {}) or {}
+    sources: list[dict[str, str]] = []
     if mda.get("source_url"):
-        label = f"SEC {mda.get('form', 'filing')} ({mda.get('filing_date', 'n/a')})"
-        lines.append(f"- {label}: {mda['source_url']}")
-    for item in (news.get("results") or [])[:5]:
+        sources.append(
+            {
+                "label": f"SEC {mda.get('form') or 'filing'} ({mda.get('filing_date') or 'n/a'})",
+                "url": mda["source_url"],
+                "kind": "filing",
+            }
+        )
+    if mda.get("annual_source_url") and mda["annual_source_url"] != mda.get("source_url"):
+        sources.append(
+            {
+                "label": f"SEC {mda.get('annual_form') or 'annual report'}"
+                f" ({mda.get('annual_filing_date') or 'n/a'})",
+                "url": mda["annual_source_url"],
+                "kind": "filing",
+            }
+        )
+    for item in (news.get("results") or [])[:8]:
         if item.get("url"):
-            lines.append(f"- {item.get('title', 'News')}: {item['url']}")
-    return "\n".join(lines)
+            sources.append(
+                {"label": item.get("title") or "News", "url": item["url"], "kind": "news"}
+            )
+    return sources
+
+
+def _sources_block(state: ResearchState) -> str:
+    return "\n".join(f"- [{s['label']}]({s['url']})" for s in build_sources(state))
 
 
 def _render_fallback(state: ResearchState) -> str:
-    """Build markdown directly from the analysis dict (no LLM)."""
+    """Build markdown directly from the analysis dict and data (no LLM)."""
     company = state.get("company_name", state["ticker"])
     ticker = state["ticker"].upper()
     a = state.get("analysis", {}) or {}
     sent = a.get("recent_sentiment", {}) or {}
-    fin = a.get("financial_summary", {}) or {}
+    summary = a.get("financial_summary", {}) or {}
+    fin = state.get("financials", {}) or {}
+    cur = fin.get("currency")
+    val = fin.get("valuation") or {}
+    prof = fin.get("profitability") or {}
+    bal = fin.get("balance") or {}
 
     def bullets(items: list[str]) -> str:
         return "\n".join(f"- {i}" for i in (items or [])) or "- n/a"
 
+    risks = "\n".join(
+        f"- **{r.get('title')}** ({r.get('severity')}) — {r.get('detail')}"
+        for r in a.get("key_risks", [])
+    )
     md = [
         f"# {company} ({ticker}) — Equity Research",
         "\n## Executive Summary",
+        a.get("thesis", "n/a"),
+        f"\n**Stance:** {a.get('stance', 'n/a')} — {a.get('stance_rationale', '')}",
+        "\n## Business Overview",
+        a.get("business_overview", "n/a"),
+        "\n## Financial Highlights",
+        "| Metric | Value |\n|---|---|",
+        f"| Price | {fmt_money((fin.get('price') or {}).get('current'), cur)} |",
+        f"| Market cap | {fmt_money(val.get('market_cap'), cur)} |",
+        f"| Trailing P/E | {fmt_mult(val.get('trailing_pe'))} |",
+        f"| Gross margin | {fmt_pct(prof.get('gross_margin'))} |",
+        f"| Operating margin | {fmt_pct(prof.get('operating_margin'))} |",
+        f"| Debt/Equity | {fmt_mult(bal.get('debt_to_equity'))} |",
+        f"| Free cash flow (TTM) | {fmt_money(bal.get('free_cash_flow'), cur)} |",
+        f"\n{summary.get('revenue_trend', '')}",
+        f"\n{summary.get('profitability_trend', '')}",
+        f"\n{summary.get('balance_sheet', '')}",
+        "\n## Valuation & Peers",
+        a.get("valuation_view", "n/a"),
+        "\n```\n" + format_peers(state.get("peers", {}) or {}, fin) + "\n```",
+        "\n## Bull Case vs. Bear Case",
         "**Bull case**",
         bullets(a.get("bull_case", [])),
         "\n**Bear case**",
         bullets(a.get("bear_case", [])),
-        "\n## Financial Highlights",
-        f"- P/E (trailing): {fin.get('pe_ratio', 'n/a')}",
-        f"- Debt/Equity: {fin.get('debt_to_equity', 'n/a')}",
-        f"- Free cash flow: {fin.get('free_cash_flow', 'n/a')}",
-        f"- Revenue trend: {fin.get('revenue_trend', 'n/a')}",
-        f"- Net income trend: {fin.get('net_income_trend', 'n/a')}",
-        f"\n{fin.get('commentary', '')}",
         "\n## Risk Factors",
-        bullets(a.get("key_risks", [])),
+        risks or "- n/a",
         "\n## Recent News & Sentiment",
         f"**Overall sentiment:** {sent.get('label', 'n/a')}",
         f"\n{sent.get('summary', '')}",
         bullets(sent.get("notable_headlines", [])),
         "\n## Conclusion",
-        fin.get("commentary", "See analysis above."),
+        summary.get("commentary", "See analysis above."),
     ]
     sources = _sources_block(state)
     if sources:
@@ -96,12 +168,16 @@ def writer_node(state: ResearchState) -> dict[str, Any]:
     logger.info("Writer: rendering report for %s", ticker)
 
     analysis = state.get("analysis", {})
+    fin = state.get("financials", {}) or {}
     sources = _sources_block(state)
 
     user_content = (
         f"Company: {company}\nTicker: {ticker}\n\n"
         f"Structured analysis (JSON):\n{json.dumps(analysis, indent=2, default=str)}\n\n"
-        f"Sources to cite (add a '## Sources' section if non-empty):\n{sources or 'none'}"
+        f"=== DATA SHEET ===\n{format_financials(fin)}\n\n"
+        f"=== PEER COMPARISON ===\n{format_peers(state.get('peers', {}) or {}, fin)}\n\n"
+        "Sources to cite (reproduce as a final '## Sources' section if non-empty):\n"
+        f"{sources or 'none'}"
     )
 
     try:

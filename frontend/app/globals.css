@@ -2,8 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Design tokens. Components reference roles (bg-surface, text-ink2, …), never
+   raw hex; the dark block re-steps the same roles for a dark surface. */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+  --page: #f6f6f3;
+  --surface: #fcfcfb;
+  --sunken: #f0efec;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #7d7b75;
+  --line: rgba(11, 11, 11, 0.1);
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --accent: #256abf;
+  --accent-ink: #ffffff;
+  --accent-wash: rgba(42, 120, 214, 0.1);
+  --up: #006300;
+  --down: #c13232;
+  --warn: #8a5a00;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --sunken: #242423;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --line: rgba(255, 255, 255, 0.1);
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --accent: #3987e5;
+    --accent-ink: #ffffff;
+    --accent-wash: rgba(57, 135, 229, 0.16);
+    --up: #2fb82f;
+    --down: #e66767;
+    --warn: #fab219;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
 }
 
 html,
@@ -12,54 +54,84 @@ body {
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  @apply bg-page font-sans text-ink antialiased;
 }
 
-/* Thin, unobtrusive scrollbars for the report panel. */
-.scroll-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-.scroll-thin::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-zinc-700;
-}
-.scroll-thin::-webkit-scrollbar-track {
-  @apply bg-transparent;
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink2 transition hover:bg-sunken hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .scroll-none {
+    scrollbar-width: none;
+  }
+  .scroll-none::-webkit-scrollbar {
+    display: none;
+  }
+  .skeleton {
+    @apply animate-pulse rounded bg-sunken;
+  }
 }
 
 /* Markdown report typography (react-markdown rendered inside `.report-prose`).
-   Builds on @tailwindcss/typography's `prose-invert`, then tightens spacing and
-   gives each H2 section a clear divider. */
+   Maps @tailwindcss/typography onto the tokens above. */
 .report-prose {
-  @apply prose prose-invert max-w-none;
+  @apply prose max-w-none;
+  --tw-prose-body: var(--ink-2);
+  --tw-prose-headings: var(--ink);
+  --tw-prose-bold: var(--ink);
+  --tw-prose-links: var(--accent);
+  --tw-prose-bullets: var(--axis);
+  --tw-prose-counters: var(--muted);
+  --tw-prose-hr: var(--grid);
+  --tw-prose-quotes: var(--ink-2);
+  --tw-prose-quote-borders: var(--axis);
+  --tw-prose-th-borders: var(--axis);
+  --tw-prose-td-borders: var(--grid);
+  --tw-prose-code: var(--ink);
 }
 .report-prose :where(h1) {
-  @apply mb-2 text-3xl font-semibold tracking-tight text-white;
+  @apply mb-2 text-3xl font-semibold tracking-tight;
 }
 .report-prose :where(h2) {
-  @apply mt-10 border-t border-zinc-800 pt-6 text-xl font-semibold text-white;
+  @apply mt-10 border-t border-grid pt-6 text-xl font-semibold;
 }
 .report-prose :where(h3) {
-  @apply mt-6 text-base font-semibold text-zinc-200;
+  @apply mt-6 text-base font-semibold;
 }
 .report-prose :where(a) {
-  @apply text-emerald-400 no-underline hover:underline;
+  @apply font-normal no-underline hover:underline;
 }
 .report-prose :where(table) {
-  @apply my-4 w-full overflow-hidden rounded-lg text-sm;
+  @apply my-4 block w-full overflow-x-auto whitespace-nowrap text-sm;
+  font-variant-numeric: tabular-nums;
 }
-.report-prose :where(thead) {
-  @apply bg-zinc-900;
+.report-prose :where(th) {
+  @apply px-3 py-2 text-left text-xs font-semibold text-muted;
 }
-.report-prose :where(th, td) {
-  @apply border border-zinc-800 px-3 py-2;
+.report-prose :where(td) {
+  @apply px-3 py-2;
 }
-.report-prose :where(strong) {
-  @apply text-white;
+.report-prose :where(thead th:first-child, tbody td:first-child) {
+  @apply pl-0;
 }
-.report-prose :where(hr) {
-  @apply border-zinc-800;
-}
-.report-prose :where(blockquote) {
-  @apply border-l-emerald-700 text-zinc-400;
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .report-prose :where(table) {
+    white-space: normal;
+  }
 }

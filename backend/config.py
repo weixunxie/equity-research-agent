@@ -39,6 +39,21 @@ class Settings:
     SEC_SUBMISSIONS_URL: str = "https://data.sec.gov/submissions/CIK{cik}.json"
     SEC_ARCHIVES_BASE: str = "https://www.sec.gov/Archives"
 
+    # --- API protection ---
+    # Comma-separated browser origins allowed to call the API ("*" = any).
+    ALLOWED_ORIGINS: list[str] = [
+        o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()
+    ]
+    # Optional regex for origins whose hostname changes, e.g. Vercel preview
+    # deployments. An origin is allowed if it matches either setting.
+    ALLOWED_ORIGIN_REGEX: str | None = os.getenv("ALLOWED_ORIGIN_REGEX") or None
+    # New research runs allowed per client IP per hour, and in total per day.
+    # Each run costs LLM, embedding and search credits; 0 disables a limit.
+    RATE_LIMIT_PER_HOUR: int = int(os.getenv("RATE_LIMIT_PER_HOUR", "10"))
+    RATE_LIMIT_PER_DAY: int = int(os.getenv("RATE_LIMIT_PER_DAY", "200"))
+    # How long a finished report is served from cache; 0 disables caching.
+    CACHE_TTL_MINUTES: int = int(os.getenv("CACHE_TTL_MINUTES", "60"))
+
     # --- Misc ---
     NEWS_LOOKBACK_DAYS: int = int(os.getenv("NEWS_LOOKBACK_DAYS", "30"))
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "30"))

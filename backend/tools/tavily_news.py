@@ -2,11 +2,29 @@
 from __future__ import annotations
 
 import logging
+from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _iso_date(value: str | None) -> str | None:
+    """Normalize Tavily's RFC 2822 timestamps ("Thu, 08 Oct 2026 14:31:00 GMT")
+    to an ISO date; leave anything unparseable as-is."""
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value).date().isoformat()
+    except (TypeError, ValueError):
+        return value
+
+
+def _source_name(url: str | None) -> str | None:
+    host = urlparse(url or "").hostname or ""
+    return host.removeprefix("www.") or None
 
 
 def get_recent_news(
@@ -54,8 +72,9 @@ def get_recent_news(
             {
                 "title": item.get("title"),
                 "url": item.get("url"),
+                "source": _source_name(item.get("url")),
                 "content": item.get("content"),
-                "published_date": item.get("published_date"),
+                "published_date": _iso_date(item.get("published_date")),
                 "score": item.get("score"),
             }
         )

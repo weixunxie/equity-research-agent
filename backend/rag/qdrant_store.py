@@ -1,12 +1,14 @@
 """Qdrant vector store for the `sec_filings` collection.
 
-Indexes MD&A chunks (per ticker) and supports filtered semantic queries used by
-the Analyst node. All operations degrade gracefully: if Qdrant or OpenAI is
+Indexes filing sections (MD&A, Risk Factors, Business) per ticker and supports
+semantic queries filtered by ticker and section, used by the Analyst node. All operations degrade gracefully: if Qdrant or OpenAI is
 unreachable, indexing returns 0 and queries return an empty list so the agent
-pipeline keeps running.
+pipeline keeps running. If the configured server itself is unreachable, an
+in-process store takes over (see ``get_client``).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from functools import lru_cache
@@ -19,6 +21,7 @@ from qdrant_client.http.models import (
     Filter,
     FilterSelector,
     MatchValue,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
@@ -30,15 +33,39 @@ from backend.rag.embeddings import embed_query, embed_texts
 logger = logging.getLogger(__name__)
 
 COLLECTION = settings.QDRANT_COLLECTION
+_UPSERT_BATCH = 64  # points per upsert request
 
 
 @lru_cache
 def get_client() -> QdrantClient:
-    return QdrantClient(
-        url=settings.QDRANT_URL,
-        api_key=settings.QDRANT_API_KEY or None,
-        timeout=settings.REQUEST_TIMEOUT,
-    )
+    """Return the configured Qdrant client, or an in-process one if the
+    configured server can't be reached.
+
+    Each run indexes a ticker's filings and queries them straight away, so an
+    in-memory collection is a complete substitute within one process — it just
+    isn't shared or persisted. That keeps retrieval working when a Qdrant Cloud
+    cluster is suspended or no local server is running.
+    """
+    if settings.QDRANT_URL:
+        try:
+            client = QdrantClient(
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY or None,
+                timeout=settings.REQUEST_TIMEOUT,
+                check_compatibility=False,
+            )
+            client.get_collections()
+            return client
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Qdrant at QDRANT_URL is unreachable (%s); using an in-memory store.", exc
+            )
+    return QdrantClient(":memory:")
+
+
+def backend_kind() -> str:
+    """``"remote"`` or ``"in-memory"`` — which store ``get_client`` resolved to."""
+    return "in-memory" if type(get_client()._client).__name__ == "QdrantLocal" else "remote"
 
 
 def ensure_collection(client: QdrantClient | None = None) -> None:
@@ -52,56 +79,106 @@ def ensure_collection(client: QdrantClient | None = None) -> None:
             ),
         )
         logger.info("Created Qdrant collection '%s'", COLLECTION)
+    if backend_kind() == "in-memory":
+        return  # the in-process store filters without payload indexes
+    # Filtering needs keyword indexes on Qdrant Cloud; creating one is idempotent.
+    for field in ("ticker", "section", "fingerprint"):
+        try:
+            client.create_payload_index(
+                collection_name=COLLECTION,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Payload index on '%s' not created: %s", field, exc)
 
 
-def _ticker_filter(ticker: str) -> Filter:
-    return Filter(
-        must=[FieldCondition(key="ticker", match=MatchValue(value=ticker.upper()))]
-    )
+def _filter(ticker: str, section: str | None = None) -> Filter:
+    must = [FieldCondition(key="ticker", match=MatchValue(value=ticker.upper()))]
+    if section:
+        must.append(FieldCondition(key="section", match=MatchValue(value=section)))
+    return Filter(must=must)
 
 
-def index_mda(ticker: str, mda_text: str, metadata: dict[str, Any] | None = None) -> int:
-    """Chunk, embed, and upsert MD&A text for ``ticker``.
+def index_sections(
+    ticker: str,
+    sections: dict[str, str],
+    metadata: dict[str, dict[str, Any]] | None = None,
+) -> int:
+    """Chunk, embed, and upsert filing sections for ``ticker``.
 
-    Existing chunks for the ticker are deleted first so re-runs stay idempotent.
-    Returns the number of chunks indexed (0 on failure or empty input).
+    ``sections`` maps a section name (``mda`` / ``risk_factors`` / ``business``)
+    to its text; ``metadata`` optionally maps the same names to payload fields
+    (form, filing date, source URL). Existing chunks for the ticker are deleted
+    first so re-runs stay idempotent. Returns the number of chunks indexed
+    (0 on failure or empty input).
     """
     ticker = ticker.upper()
-    chunks = chunk_text(mda_text)
-    if not chunks:
+    items: list[tuple[str, int, str]] = [
+        (name, idx, chunk)
+        for name, text in sections.items()
+        for idx, chunk in enumerate(chunk_text(text))
+    ]
+    if not items:
         return 0
+    # Identifies this exact set of chunks, so an unchanged filing isn't embedded twice.
+    fingerprint = hashlib.sha1("\x00".join(chunk for _, _, chunk in items).encode()).hexdigest()
 
     try:
         client = get_client()
         ensure_collection(client)
+        already = client.count(
+            collection_name=COLLECTION,
+            count_filter=Filter(
+                must=[
+                    *_filter(ticker).must,
+                    FieldCondition(key="fingerprint", match=MatchValue(value=fingerprint)),
+                ]
+            ),
+            exact=True,
+        ).count
+        if already == len(items):
+            logger.info("Filing chunks for %s already indexed; skipping embedding", ticker)
+            return already
+
         client.delete(
             collection_name=COLLECTION,
-            points_selector=FilterSelector(filter=_ticker_filter(ticker)),
+            points_selector=FilterSelector(filter=_filter(ticker)),
         )
 
-        vectors = embed_texts(chunks)
-        base_payload = {"ticker": ticker, **(metadata or {})}
+        vectors = embed_texts([chunk for _, _, chunk in items])
         points = [
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=vector,
-                payload={**base_payload, "chunk_index": idx, "text": chunk},
+                payload={
+                    "ticker": ticker,
+                    **((metadata or {}).get(name) or {}),
+                    "section": name,
+                    "fingerprint": fingerprint,
+                    "chunk_index": idx,
+                    "text": chunk,
+                },
             )
-            for idx, (chunk, vector) in enumerate(zip(chunks, vectors))
+            for (name, idx, chunk), vector in zip(items, vectors)
         ]
-        client.upsert(collection_name=COLLECTION, points=points)
-        logger.info("Indexed %d MD&A chunks for %s", len(points), ticker)
+        for i in range(0, len(points), _UPSERT_BATCH):
+            client.upsert(collection_name=COLLECTION, points=points[i : i + _UPSERT_BATCH])
+        logger.info("Indexed %d filing chunks for %s", len(points), ticker)
         return len(points)
     except Exception as exc:  # noqa: BLE001 - RAG is best-effort
-        logger.warning("Failed to index MD&A for %s: %s", ticker, exc)
+        logger.warning("Failed to index filing sections for %s: %s", ticker, exc)
         return 0
 
 
-def query_filings(ticker: str, query_text: str, top_k: int = 5) -> list[dict[str, Any]]:
-    """Semantic search over a ticker's indexed MD&A chunks.
+def query_filings(
+    ticker: str, query_text: str, top_k: int = 5, section: str | None = None
+) -> list[dict[str, Any]]:
+    """Semantic search over a ticker's indexed filing chunks, optionally
+    restricted to one section.
 
-    Returns a list of ``{text, score, chunk_index, ...}`` dicts, or an empty list
-    if nothing is indexed or the backend is unavailable.
+    Returns a list of ``{text, score, section, chunk_index, ...}`` dicts, or an
+    empty list if nothing is indexed or the backend is unavailable.
     """
     try:
         client = get_client()
@@ -111,7 +188,7 @@ def query_filings(ticker: str, query_text: str, top_k: int = 5) -> list[dict[str
         response = client.query_points(
             collection_name=COLLECTION,
             query=qvec,
-            query_filter=_ticker_filter(ticker),
+            query_filter=_filter(ticker, section),
             limit=top_k,
             with_payload=True,
         )
@@ -126,6 +203,7 @@ def query_filings(ticker: str, query_text: str, top_k: int = 5) -> list[dict[str
             {
                 "text": payload.get("text", ""),
                 "score": point.score,
+                "section": payload.get("section"),
                 "chunk_index": payload.get("chunk_index"),
                 "form": payload.get("form"),
                 "filing_date": payload.get("filing_date"),

@@ -18,8 +18,9 @@ class ResearchState(TypedDict, total=False):
 
     # Researcher outputs
     company_name: str
-    mda: dict[str, Any]
+    mda: dict[str, Any]  # filing sections: MD&A + Risk Factors + Business
     financials: dict[str, Any]
+    peers: dict[str, Any]
     news: dict[str, Any]
     chunks_indexed: int
 
