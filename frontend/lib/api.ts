@@ -7,8 +7,15 @@ import type {
   StreamEvent,
 } from "./types";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+/** The API's base URL. A bare host ("api.example.com") gets https:// — without
+ *  a scheme, fetch would treat it as a path on the frontend's own domain. */
+function apiBase(raw: string | undefined): string {
+  const value = raw?.trim().replace(/\/+$/, "");
+  if (!value) return "http://localhost:8000";
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+const API_URL = apiBase(process.env.NEXT_PUBLIC_API_URL);
 
 export interface StreamHandlers {
   onStep: (step: StepKey, status: StepStatus) => void;
