@@ -109,4 +109,7 @@ class ResearchResponse(BaseModel):
     news: list[NewsItem] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # True when the run found no filings and no fundamentals, so no analysis
+    # or report prose was generated.
+    insufficient_data: bool = False
     errors: list[str] = Field(default_factory=list)

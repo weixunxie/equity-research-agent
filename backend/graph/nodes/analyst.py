@@ -2,7 +2,8 @@
 
 Synthesizes the Researcher's raw data into a structured ``Analysis`` (thesis,
 stance, bull/bear case, catalysts, risks, valuation view, sentiment, financial
-summary). It grounds the prompt in filing excerpts retrieved from Qdrant —
+summary). A run with neither filing text nor fundamentals gets no analysis at
+all — there is nothing to ground a view in. Otherwise it grounds the prompt in filing excerpts retrieved from Qdrant —
 queried per section, so risks come from Item 1A, operating trends from the MD&A
 and the business model from Item 1 — and falls back to a data-derived stub if
 the LLM is unavailable so the pipeline always completes.
@@ -12,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.errors import describe_error
 from backend.graph.formatting import format_financials, format_news, format_peers
 from backend.graph.state import ResearchState
 from backend.llm import get_chat_model
@@ -47,6 +49,7 @@ _SECTION_TEXT_KEYS = {
     "mda": "mda_text",
     "business": "business_text",
 }
+INSUFFICIENT_DATA = "Not enough source data to form a view"
 _EXCERPT_CHARS = 1500
 _RAW_FALLBACK_CHARS = 5000
 
@@ -68,6 +71,21 @@ _SYSTEM_PROMPT = (
     "recommendation; do not be promotional.\n"
     "- If data is missing, say so rather than inventing it."
 )
+
+
+def has_source_data(state: ResearchState) -> bool:
+    """Whether the Researcher found any filing text or fundamentals. News and a
+    price chart alone are not enough to write a thesis from."""
+    mda = state.get("mda") or {}
+    if any(mda.get(key) for key in _SECTION_TEXT_KEYS.values()):
+        return True
+    fin = state.get("financials") or {}
+    return bool(
+        fin.get("quarterly")
+        or fin.get("annual")
+        or any(v is not None for v in (fin.get("valuation") or {}).values())
+        or (fin.get("growth") or {}).get("revenue_ttm") is not None
+    )
 
 
 def _gather_rag_context(ticker: str, mda: dict[str, Any]) -> str:
@@ -129,6 +147,9 @@ def _fallback_analysis(state: ResearchState, reason: str) -> dict[str, Any]:
 def analyst_node(state: ResearchState) -> dict[str, Any]:
     ticker = state["ticker"].strip().upper()
     company = state.get("company_name", ticker)
+    if not has_source_data(state):
+        logger.info("Analyst: no filings or financials for %s; skipping analysis", ticker)
+        return {"errors": [f"Analyst: {INSUFFICIENT_DATA} (no SEC filings or financials found)."]}
     logger.info("Analyst: synthesizing analysis for %s", ticker)
 
     fin = state.get("financials", {})
@@ -164,7 +185,8 @@ Latest annual filing: {mda.get('annual_form') or 'n/a'} dated {mda.get('annual_f
         return {"analysis": analysis.model_dump()}
     except Exception as exc:  # noqa: BLE001 - keep the pipeline alive
         logger.warning("Analyst LLM call failed for %s: %s", ticker, exc)
+        reason = describe_error(exc)
         return {
-            "analysis": _fallback_analysis(state, str(exc)),
-            "errors": [f"Analyst: LLM synthesis failed ({exc})."],
+            "analysis": _fallback_analysis(state, reason),
+            "errors": [f"Analyst: LLM synthesis failed ({reason})."],
         }

@@ -173,6 +173,9 @@ export interface ResearchData {
   news: NewsItem[];
   sources: Source[];
   metadata: ResearchMetadata;
+  /** No filings and no fundamentals were found, so no analysis is written.
+   *  Absent on reports saved before the flag existed. */
+  insufficient_data?: boolean;
 }
 
 export interface ResearchResponse extends ResearchData {

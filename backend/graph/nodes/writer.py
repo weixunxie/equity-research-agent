@@ -3,7 +3,8 @@
 Turns the Analyst's structured ``Analysis`` plus the raw market data into a
 markdown research note with fixed sections. The figures come from the data
 sheet, not from the Analyst's prose, so tables carry the actual numbers. Falls
-back to deterministic rendering if the LLM is unavailable.
+back to deterministic rendering if the LLM is unavailable, and writes no prose
+at all when the Analyst had too little source data to produce an analysis.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import json
 import logging
 from typing import Any
 
+from backend.errors import describe_error
 from backend.graph.formatting import (
     fmt_money,
     fmt_mult,
@@ -18,6 +20,7 @@ from backend.graph.formatting import (
     format_financials,
     format_peers,
 )
+from backend.graph.nodes.analyst import INSUFFICIENT_DATA
 from backend.graph.state import ResearchState
 from backend.llm import get_chat_model
 
@@ -165,9 +168,13 @@ def _render_fallback(state: ResearchState) -> str:
 def writer_node(state: ResearchState) -> dict[str, Any]:
     ticker = state["ticker"].strip().upper()
     company = state.get("company_name", ticker)
+
+    analysis = state.get("analysis")
+    if not analysis:
+        logger.info("Writer: no analysis for %s; skipping the report", ticker)
+        return {"report_markdown": f"# {company} ({ticker})\n\n{INSUFFICIENT_DATA}."}
     logger.info("Writer: rendering report for %s", ticker)
 
-    analysis = state.get("analysis", {})
     fin = state.get("financials", {}) or {}
     sources = _sources_block(state)
 
@@ -198,5 +205,7 @@ def writer_node(state: ResearchState) -> dict[str, Any]:
         logger.warning("Writer LLM call failed for %s: %s", ticker, exc)
         return {
             "report_markdown": _render_fallback(state),
-            "errors": [f"Writer: LLM rendering failed ({exc}); used fallback template."],
+            "errors": [
+                f"Writer: LLM rendering failed ({describe_error(exc)}); used fallback template."
+            ],
         }

@@ -50,10 +50,13 @@ export default function Hero({
   data,
   analysis,
   analysisPending,
+  insufficient = false,
 }: {
   data: ResearchData;
   analysis: Analysis | null;
   analysisPending: boolean;
+  /** The run found no filings or fundamentals, so no view was formed. */
+  insufficient?: boolean;
 }) {
   const { financials } = data;
   const price = financials.price ?? {};
@@ -121,6 +124,14 @@ export default function Hero({
             <div className="skeleton h-4 w-3/4" />
             <div className="skeleton mt-4 h-6 w-40 rounded-full" />
           </div>
+        ) : insufficient ? (
+          <>
+            <p className="mt-2 text-[15px] font-medium text-ink">Not enough source data to form a view.</p>
+            <p className="mt-2 text-sm text-ink2">
+              No SEC filings or financial statements were found for {data.ticker}, so no thesis was
+              written. See Sources &amp; run details for what was checked.
+            </p>
+          </>
         ) : (
           <p className="mt-2 text-sm text-muted">No analysis was produced for this run.</p>
         )}

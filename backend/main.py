@@ -3,6 +3,9 @@
 Run with:
     uvicorn backend.main:app --reload --port 8000
 
+Both endpoints first check that the ticker resolves (SEC EDGAR or yfinance)
+and answer 404 with a close-match suggestion when it doesn't.
+
 Endpoints:
     POST /research         -> blocking; returns the full ResearchResponse.
     POST /research/stream  -> Server-Sent Events; emits real per-node progress
@@ -24,11 +27,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from backend.config import settings
+from backend.errors import describe_error
+from backend.graph.nodes.analyst import has_source_data
 from backend.graph.nodes.writer import build_sources
 from backend.graph.pipeline import get_graph, run_research
 from backend.guard import RateLimiter, TTLCache
 from backend.models import Analysis, ResearchRequest, ResearchResponse
 from backend.rag.qdrant_store import backend_kind
+from backend.tools.ticker_check import (
+    TickerCheckUnavailable,
+    UnknownTickerError,
+    validate_ticker,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -114,6 +124,7 @@ def _data_payload(ticker: str, state: dict) -> dict:
         "news": _news_items(news),
         "sources": build_sources(state),
         "metadata": metadata,
+        "insufficient_data": not has_source_data(state),
     }
 
 
@@ -159,6 +170,25 @@ def _parse_ticker(raw: str) -> str:
             detail="`ticker` must be 1-10 characters: letters, digits, '.' or '-'.",
         )
     return ticker
+
+
+def _require_known(ticker: str) -> None:
+    """Reject a symbol that neither SEC EDGAR nor yfinance recognizes, before
+    any pipeline work (or rate-limit budget) is spent on it."""
+    try:
+        validate_ticker(ticker)
+    except UnknownTickerError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "unknown_ticker",
+                "message": str(exc),
+                "ticker": exc.ticker,
+                "suggestion": exc.suggestion,
+            },
+        )
+    except TickerCheckUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 def _client_ip(request: Request) -> str:
@@ -212,13 +242,16 @@ def research(request: ResearchRequest, http_request: Request) -> ResearchRespons
     cached = _cached(ticker, request.refresh)
     if cached:
         return cached
+    _require_known(ticker)
     _admit(http_request)
 
     try:
         state = run_research(ticker)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Pipeline failed for %s", ticker)
-        raise HTTPException(status_code=500, detail=f"Research pipeline failed: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Research pipeline failed: {describe_error(exc)}."
+        )
 
     result = _build_response(ticker, state)
     _remember(ticker, result)
@@ -250,6 +283,7 @@ def research_stream(request: ResearchRequest, http_request: Request) -> Streamin
             media_type="text/event-stream",
             headers=headers,
         )
+    _require_known(ticker)
     _admit(http_request)
 
     def event_gen() -> Iterator[str]:
@@ -298,7 +332,7 @@ def research_stream(request: ResearchRequest, http_request: Request) -> Streamin
             yield _sse({"type": "result", "data": result.model_dump()})
         except Exception as exc:  # noqa: BLE001
             logger.exception("Streaming pipeline failed for %s", ticker)
-            yield _sse({"type": "error", "message": str(exc)})
+            yield _sse({"type": "error", "message": f"Research pipeline failed: {describe_error(exc)}."})
 
     return StreamingResponse(
         event_gen(),

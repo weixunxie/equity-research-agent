@@ -66,9 +66,10 @@ def _doc_url(cik: str, accession: str, filename: str) -> str:
     )
 
 
-def _company_index() -> dict[str, dict[str, str]]:
-    """Ticker -> {cik, title} for every SEC registrant. The source file is ~1MB
-    and changes rarely, so it is fetched once a day rather than once per run."""
+def company_index() -> dict[str, dict[str, str]]:
+    """Ticker -> {cik, title} for every SEC registrant, in the file's order
+    (largest companies first). The source file is ~1MB and changes rarely, so
+    it is fetched once a day rather than once per run. Raises on fetch failure."""
     global _company_index_cache
     now = time.monotonic()
     if _company_index_cache and now - _company_index_cache[0] < _COMPANY_INDEX_TTL:
@@ -85,19 +86,28 @@ def _company_index() -> dict[str, dict[str, str]]:
     return index
 
 
+def lookup_ticker(index: dict[str, dict[str, str]], ticker: str) -> tuple[str, dict[str, str]] | None:
+    """Find ``ticker`` in the SEC index, accepting the dotted share-class form
+    ("BRK.B") for SEC's dashed one ("BRK-B"). Returns (sec_ticker, row)."""
+    for candidate in dict.fromkeys((ticker, ticker.replace(".", "-"))):
+        if candidate in index:
+            return candidate, index[candidate]
+    return None
+
+
 def resolve_company(ticker: str) -> dict[str, str] | None:
     """Map a ticker to its zero-padded CIK and company title via SEC's
     company_tickers.json. Returns None if not found."""
     ticker = ticker.strip().upper()
     try:
-        row = _company_index().get(ticker)
+        found = lookup_ticker(company_index(), ticker)
     except Exception as exc:  # noqa: BLE001 - network/parse failures are non-fatal
         logger.warning("Failed to fetch company_tickers.json: %s", exc)
         return None
-    if row is None:
+    if found is None:
         logger.warning("Ticker %s not found in SEC company_tickers.json", ticker)
         return None
-    return {**row, "ticker": ticker}
+    return {**found[1], "ticker": ticker}
 
 
 def latest_filing(

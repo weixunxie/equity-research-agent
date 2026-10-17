@@ -26,7 +26,9 @@ export interface StreamHandlers {
   /** A chunk of report markdown, as the Writer generates it. */
   onToken: (text: string) => void;
   onResult: (data: ResearchResponse) => void;
-  onError: (message: string) => void;
+  /** `unknown` is set when the API didn't recognize the ticker; its
+   *  `suggestion` is the closest real ticker, if any. */
+  onError: (message: string, unknown?: { suggestion: string | null }) => void;
 }
 
 /**
@@ -60,12 +62,13 @@ export async function runResearchStream(
   }
 
   if (!res.ok || !res.body) {
-    // FastAPI errors carry a human-readable `detail` (rate limit, bad ticker).
-    const detail = await res
-      .json()
-      .then((body) => (typeof body?.detail === "string" ? body.detail : null))
-      .catch(() => null);
-    handlers.onError(detail ?? `Request failed: HTTP ${res.status}`);
+    // FastAPI errors carry a human-readable `detail` (rate limit, bad ticker);
+    // an unknown ticker's detail is an object with a suggested correction.
+    const detail = await res.json().then((body) => body?.detail).catch(() => null);
+    if (typeof detail === "string") handlers.onError(detail);
+    else if (detail?.code === "unknown_ticker")
+      handlers.onError(detail.message, { suggestion: detail.suggestion ?? null });
+    else handlers.onError(`Request failed: HTTP ${res.status}`);
     return;
   }
 

@@ -54,6 +54,10 @@ export default function Dashboard({
   analysisPending: boolean;
 }) {
   const { financials } = data;
+  // With no filings and no fundamentals the Analyst writes nothing, so there
+  // is no analysis to wait for.
+  const insufficient = data.insufficient_data === true;
+  const pending = analysisPending && !insufficient;
   const hasQuarterly = (financials.quarterly?.length ?? 0) > 0;
   const [mode, setMode] = useState<"quarterly" | "annual">(hasQuarterly ? "quarterly" : "annual");
   const history = financials.price_history ?? [];
@@ -62,7 +66,7 @@ export default function Dashboard({
 
   return (
     <div className="space-y-4">
-      <Hero data={data} analysis={analysis} analysisPending={analysisPending} />
+      <Hero data={data} analysis={analysis} analysisPending={pending} insufficient={insufficient} />
       <KpiGrid financials={financials} />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -100,7 +104,7 @@ export default function Dashboard({
         </section>
       </div>
 
-      {analysis ? <Thesis analysis={analysis} /> : analysisPending ? <ThesisSkeleton /> : null}
+      {analysis ? <Thesis analysis={analysis} /> : pending ? <ThesisSkeleton /> : null}
 
       <section className="card p-6">
         <h2 className="eyebrow">Valuation vs. peers</h2>

@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from backend.config import settings
+from backend.errors import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def get_recent_news(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Tavily news search failed for %s: %s", company_name, exc)
-        out["error"] = f"Tavily search failed: {exc}"
+        out["error"] = f"Tavily search failed: {describe_error(exc)}."
         return out
 
     out["answer"] = resp.get("answer")

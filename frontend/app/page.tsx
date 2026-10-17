@@ -111,6 +111,8 @@ export default function Page() {
   const [markdown, setMarkdown] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
+  // Set when the API rejected the ticker as unknown; holds its suggested fix.
+  const [unknownTicker, setUnknownTicker] = useState<{ suggestion: string | null } | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
@@ -138,6 +140,7 @@ export default function Page() {
     setMarkdown("");
     setErrors([]);
     setFailure(null);
+    setUnknownTicker(null);
     setTab("overview");
     pendingText.current = "";
     window.scrollTo({ top: 0 });
@@ -171,8 +174,9 @@ export default function Page() {
           setPhase("done");
           setHistory(saveToHistory(result));
         },
-        onError: (message) => {
+        onError: (message, unknown) => {
           setFailure(message);
+          setUnknownTicker(unknown ?? null);
           setPhase("error");
         },
       },
@@ -200,6 +204,7 @@ export default function Page() {
     setMarkdown(report.report_markdown);
     setErrors(report.errors);
     setFailure(null);
+    setUnknownTicker(null);
     setSteps(ALL_DONE);
     setPhase("done");
     setTab("overview");
@@ -207,6 +212,7 @@ export default function Page() {
 
   const running = phase === "running";
   const showWorkspace = running || data !== null;
+  const suggestion = unknownTicker?.suggestion ?? null;
 
   return (
     <div className="min-h-screen">
@@ -230,8 +236,19 @@ export default function Page() {
       <main className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-6">
         {failure ? (
           <div className="card mb-4 p-5" role="alert">
-            <h2 className="text-sm font-semibold text-down">Research failed</h2>
+            <h2 className="text-sm font-semibold text-down">
+              {unknownTicker ? "Unknown ticker" : "Research failed"}
+            </h2>
             <p className="mt-1 text-sm text-ink2">{failure}</p>
+            {suggestion ? (
+              <button
+                type="button"
+                className="btn mt-3 font-semibold tracking-wide"
+                onClick={() => run(suggestion)}
+              >
+                Research {suggestion}
+              </button>
+            ) : null}
           </div>
         ) : null}
 

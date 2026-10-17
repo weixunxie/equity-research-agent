@@ -10,6 +10,8 @@ from typing import Any
 
 import yfinance as yf
 
+from backend.errors import describe_error
+
 logger = logging.getLogger(__name__)
 
 # Income-statement rows surfaced as time series (output key -> yfinance row label).
@@ -116,7 +118,8 @@ def get_financials(ticker: str) -> dict[str, Any]:
     try:
         tk = yf.Ticker(ticker)
     except Exception as exc:  # noqa: BLE001
-        out["error"] = f"Failed to initialize yfinance ticker: {exc}"
+        logger.warning("yfinance Ticker init failed for %s: %s", ticker, exc)
+        out["error"] = f"Failed to initialize yfinance ticker: {describe_error(exc)}."
         return out
 
     # .info is occasionally flaky; never let it sink the whole call.
@@ -271,7 +274,8 @@ def get_peers(ticker: str, count: int = _PEER_COUNT) -> dict[str, Any]:
     try:
         info = yf.Ticker(ticker).info or {}
     except Exception as exc:  # noqa: BLE001
-        out["error"] = f"Peer lookup failed: {exc}"
+        logger.warning("peer lookup failed for %s: %s", ticker, exc)
+        out["error"] = f"Peer lookup failed: {describe_error(exc)}."
         return out
 
     own_cap = _clean(info.get("marketCap"))

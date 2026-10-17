@@ -59,6 +59,7 @@ class FakeGraph:
 def api(monkeypatch):
     graph = FakeGraph()
     monkeypatch.setattr(main, "get_graph", lambda: graph)
+    monkeypatch.setattr(main, "validate_ticker", lambda _t: None)  # see test_ticker_check
     monkeypatch.setattr(main, "_cache", TTLCache(ttl=3600))
     monkeypatch.setattr(main, "_ip_limiter", RateLimiter(limit=2, window=3600))
     monkeypatch.setattr(main, "_global_limiter", RateLimiter(limit=100, window=86400))
